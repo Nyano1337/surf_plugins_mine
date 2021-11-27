@@ -282,6 +282,8 @@ static void GetDemoStatus()
 		demoStatus.GET();
 		delete demoStatus;
 	}
+
+	delete dir;
 }
 
 public void GetDemoStatusCallback(bool success, const char[] error, System2HTTPRequest request, System2HTTPResponse response, HTTPRequestMethod method)
