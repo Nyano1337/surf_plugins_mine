@@ -1,16 +1,15 @@
 #include <sourcemod>
 #include <system2>
 #include <sourcetvmanager>
-#include <shavit>
+#include <convar_class>
 
-#define FTP_PORT 21
-#define FTP_USER "null"
-#define FTP_PWD	"null"
-#define FTP_PREFIX "null"
-#define HTTP_PREFIX "null"
-#define DOWNLOAD_LIB "null"
-#define TIME_OFFSET 28800 // china
 #define PER_MEGABTYES (1 << 20)
+
+native int Shavit_PrintToChat(int client, const char[] format, any ...);
+native void Shavit_PrintToChatAll(const char[] format, any ...);
+
+//ServerCommand("tv_record \"%s/auto-%s-%s\"", sPath, sTime, sMap);
+//ServerCommand("tv_stoprecord");
 
 enum struct demo_t
 {
@@ -26,10 +25,28 @@ int gI_DemoStartRecordTime;
 Menu gH_DemoMenuList = null;
 StringMap gSM_DemoStatus = null;
 
+Convar gCV_FTP_PORT = null;
+Convar gCV_FTP_USER = null;
+Convar gCV_FTP_PWD = null;
+Convar gCV_FTP_PREFIX = null;
+Convar gCV_HTTP_PREFIX = null;
+Convar gCV_DOWNLOAD_LIB = null;
+Convar gCV_TIME_OFFSET = null;
+
 public void OnPluginStart()
 {
 	RegConsoleCmd("sm_demos", Command_ShowDemos, "Show demo list to players.");
 	RegConsoleCmd("sm_debugdemo", Command_Debug);
+
+	gCV_FTP_PORT = new Convar("demo_ftp_port", "21", "ftp port");
+	gCV_FTP_USER = new Convar("demo_ftp_user", "ftp", "ftp user");
+	gCV_FTP_PWD = new Convar("demo_ftp_password", "123456", "ftp password");
+	gCV_FTP_PREFIX = new Convar("demo_ftp_prefix", "ftp://43.240.157.98:21/", "ftp link prefix");
+	gCV_HTTP_PREFIX = new Convar("demo_http_prefix", "http://43.240.157.98:40000/file/1/", "http link prefix");
+	gCV_DOWNLOAD_LIB = new Convar("demo_download_lib", "http://43.240.157.98:40000/1/main", "demo download library link");
+	gCV_TIME_OFFSET = new Convar("demo_time_offset", "28800", "local time offset (based on CET, Example: CET 8:00 in china is 16:00, demo_time_offset should be 28800)");
+
+	Convar.AutoExecConfig();
 }
 
 public Action Command_Debug(int client, int args)
@@ -83,7 +100,7 @@ void OpenSubDemoMenu(int client, const char[] sDemo)
 	Menu menu = new Menu(SubDemoMenu_Handler);
 
 	char sDate[64];
-	FormatTime(sDate, 64, "%A %B %C %G %T", GetFileTime(sDemo, FileTime_Created) + TIME_OFFSET);
+	FormatTime(sDate, 64, "%A %B %C %G %T", GetFileTime(sDemo, FileTime_Created) + gCV_TIME_OFFSET.IntValue);
 
 	menu.SetTitle("Demo 名字: %s  \n"...
 					"Demo 创建日期: %s  \n"...
@@ -116,12 +133,16 @@ public int SubDemoMenu_Handler(Menu menu, MenuAction action, int param1, int par
 
 		else if(StrEqual(sInfo, "lib"))
 		{
-			Shavit_PrintToChat(param1, "Demo下载库链接: [{lightgreen}%s{default}]", DOWNLOAD_LIB);
+			char sDownloadLibLink[PLATFORM_MAX_PATH];
+			gCV_DOWNLOAD_LIB.GetString(sDownloadLibLink, sizeof(sDownloadLibLink));
+			Shavit_PrintToChat(param1, "Demo下载库链接: [{lightgreen}%s{default}]", sDownloadLibLink);
 		}
 
 		else
 		{
-			Shavit_PrintToChat(param1, "下载链接: [{lightgreen}%s%s{default}]", HTTP_PREFIX, sInfo);
+			char sHttpPrefix[PLATFORM_MAX_PATH];
+			gCV_HTTP_PREFIX.GetString(sHttpPrefix, sizeof(sHttpPrefix));
+			Shavit_PrintToChat(param1, "下载链接: [{lightgreen}%s%s{default}]", sHttpPrefix, sInfo);
 		}
 	}
 
@@ -158,7 +179,7 @@ public void SourceTV_OnStartRecording(int instance, const char[] filename)
 	GetDemoStatus();
 	GetDemoStatus(); // get again... i dont like this, but somehow http server or curl have issue?
 
-	gI_DemoStartRecordTime = GetTime() + TIME_OFFSET;
+	gI_DemoStartRecordTime = GetTime() + gCV_TIME_OFFSET.IntValue;
 }
 
 public void SourceTV_OnStopRecording(int instance, const char[] filename, int recordingtick)
@@ -169,7 +190,7 @@ public void SourceTV_OnStopRecording(int instance, const char[] filename, int re
 static bool RenameOldDemo(const char[] oldname)
 {
 	char sTime[50];
-	FormatTime(sTime, sizeof(sTime), "%F-%H.%M.%S", gI_DemoStartRecordTime);
+	FormatTime(sTime, sizeof(sTime), "%F-%H-%M-%S", gI_DemoStartRecordTime);
 
 	char sNewDemoName[PLATFORM_MAX_PATH];
 	FormatEx(sNewDemoName, PLATFORM_MAX_PATH, "%s-%s.dem", sTime, gS_Map);
@@ -210,6 +231,11 @@ static void LoadDemos(const char[] nowDemoName)
 		//GetDemoStatus(sDemo); removed, have bug
 
 		info.iCreateTime = GetFileTime(sDemo, FileTime_Created);
+		if(info.iCreateTime - GetTime() >= 604800) // after 7 days
+		{
+			DeleteFile(sDemo);
+			continue;
+		}
 
 		int ch = FindCharInString(sDemo, 'T', false);
 		if(ch != -1)
@@ -275,7 +301,9 @@ static void GetDemoStatus()
 			continue;
 		}
 
-		FormatEx(sURL, sizeof(sURL), "%s"..."%s", HTTP_PREFIX, sDemo);
+		char sHttpPrefix[PLATFORM_MAX_PATH];
+		gCV_HTTP_PREFIX.GetString(sHttpPrefix, sizeof(sHttpPrefix));
+		FormatEx(sURL, sizeof(sURL), "%s"..."%s", sHttpPrefix, sDemo);
 
 		System2HTTPRequest demoStatus = new System2HTTPRequest(GetDemoStatusCallback, sURL);
 		demoStatus.Timeout = 30;
@@ -298,19 +326,26 @@ public void GetDemoStatusCallback(bool success, const char[] error, System2HTTPR
 		PrintToServer("a uploaded demo-> %s", sDemo);
 	}
 
-	GetDemoNameFromURL(HTTP_PREFIX, sDemo, 512);
+	char sHttpPrefix[PLATFORM_MAX_PATH];
+	gCV_HTTP_PREFIX.GetString(sHttpPrefix, sizeof(sHttpPrefix));
+	GetDemoNameFromURL(sHttpPrefix, sDemo, 512);
 
 	gSM_DemoStatus.SetValue(sDemo, bUploaded?1:0);
 }
 
 static void UploadDemo(const char[] sDemo)
 {
+	char sFtpUser[PLATFORM_MAX_PATH], sFtpPWD[PLATFORM_MAX_PATH], sFtpPrefix[PLATFORM_MAX_PATH];
+	gCV_FTP_USER.GetString(sFtpUser, sizeof(sFtpUser));
+	gCV_FTP_PWD.GetString(sFtpPWD, sizeof(sFtpPWD));
+	gCV_FTP_PREFIX.GetString(sFtpPrefix, sizeof(sFtpPrefix));
+
 	char sURL[PLATFORM_MAX_PATH];
-	FormatEx(sURL, sizeof(sURL), "%s"..."%s", FTP_PREFIX, sDemo);
+	FormatEx(sURL, sizeof(sURL), "%s"..."%s", sFtpPrefix, sDemo);
 
 	System2FTPRequest upload = new System2FTPRequest(UploadDemoCallback, sURL);
-	upload.SetAuthentication(FTP_USER, FTP_PWD);
-	upload.SetPort(21);
+	upload.SetAuthentication(sFtpUser, sFtpPWD);
+	upload.SetPort(gCV_FTP_PORT.IntValue);
 	upload.SetInputFile(sDemo);
 	upload.AppendToFile = false;
 	upload.StartRequest();
@@ -326,12 +361,16 @@ public void UploadDemoCallback(bool success, const char[] error, System2FTPReque
 								response.UploadSize / PER_MEGABTYES, 
 								response.UploadSpeed / PER_MEGABTYES);
 
+		char sFtpPrefix[PLATFORM_MAX_PATH], sHttpPrefix[PLATFORM_MAX_PATH];
+		gCV_FTP_PREFIX.GetString(sFtpPrefix, sizeof(sFtpPrefix));
+		gCV_HTTP_PREFIX.GetString(sHttpPrefix, sizeof(sHttpPrefix));
+
 		char sDemo[512];
 		request.GetURL(sDemo, sizeof(sDemo));
-		GetDemoNameFromURL(FTP_PREFIX, sDemo, 512);
+		GetDemoNameFromURL(sFtpPrefix, sDemo, 512);
 		gSM_DemoStatus.SetValue(sDemo, 1);
 
-		Shavit_PrintToChatAll("下载链接: [{lightgreen}%s%s{default}]", HTTP_PREFIX, sDemo);
+		Shavit_PrintToChatAll("下载链接: [{lightgreen}%s%s{default}]", sHttpPrefix, sDemo);
 	}
 	else
 	{
