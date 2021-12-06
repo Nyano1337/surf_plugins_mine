@@ -176,8 +176,6 @@ public void SourceTV_OnStartRecording(int instance, const char[] filename)
 	GetCurrentMap(gS_Map, 160);
 
 	LoadDemos(filename);
-	GetDemoStatus();
-	GetDemoStatus(); // get again... i dont like this, but somehow http server or curl have issue?
 
 	gI_DemoStartRecordTime = GetTime() + gCV_TIME_OFFSET.IntValue;
 }
@@ -228,7 +226,7 @@ static void LoadDemos(const char[] nowDemoName)
 			continue;
 		}
 
-		//GetDemoStatus(sDemo); removed, have bug
+		GetDemoStatus(sDemo);
 
 		info.iCreateTime = GetFileTime(sDemo, FileTime_Created);
 		if(info.iCreateTime - GetTime() >= 604800) // after 7 days
@@ -281,37 +279,17 @@ public int ADT_SortCreateTimeAscending(int index1, int index2, Handle array, Han
 	return info1.iCreateTime < info2.iCreateTime;
 }
 
-static void GetDemoStatus()
+static void GetDemoStatus(const char[] sDemo)
 {
-	DirectoryListing dir = OpenDirectory("./");
-	if(dir == null)
-	{
-		LogError("Failed to open current dir");
-		return;
-	}
-
-	FileType type = FileType_Unknown;
-
-	char sDemo[PLATFORM_MAX_PATH];
 	char sURL[PLATFORM_MAX_PATH];
-	while(dir.GetNext(sDemo, sizeof(sDemo), type))
-	{
-		if(type != FileType_File || StrContains(sDemo, ".dem", false) == -1)
-		{
-			continue;
-		}
+	char sHttpPrefix[PLATFORM_MAX_PATH];
+	gCV_HTTP_PREFIX.GetString(sHttpPrefix, sizeof(sHttpPrefix));
+	FormatEx(sURL, sizeof(sURL), "%s"..."%s", sHttpPrefix, sDemo);
 
-		char sHttpPrefix[PLATFORM_MAX_PATH];
-		gCV_HTTP_PREFIX.GetString(sHttpPrefix, sizeof(sHttpPrefix));
-		FormatEx(sURL, sizeof(sURL), "%s"..."%s", sHttpPrefix, sDemo);
-
-		System2HTTPRequest demoStatus = new System2HTTPRequest(GetDemoStatusCallback, sURL);
-		demoStatus.Timeout = 30;
-		demoStatus.GET();
-		delete demoStatus;
-	}
-
-	delete dir;
+	System2HTTPRequest demoStatus = new System2HTTPRequest(GetDemoStatusCallback, sURL);
+	demoStatus.Timeout = 30;
+	demoStatus.GET();
+	delete demoStatus;
 }
 
 public void GetDemoStatusCallback(bool success, const char[] error, System2HTTPRequest request, System2HTTPResponse response, HTTPRequestMethod method)
