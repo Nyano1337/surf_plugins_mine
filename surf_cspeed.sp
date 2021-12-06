@@ -8,10 +8,10 @@
 #pragma semicolon 1
 
 #include <sourcemod>
+#include <clientprefs>
 #include <convar_class>
 #include <shavit>
-
-// TODO: Json clientprefs
+#include <surf>
 
 // velocity has to change this much before it is colored as increase/decrease
 #define COLORIZE_DEADZONE 2.0
@@ -657,22 +657,9 @@ public int AdjustMenu_Handler(Menu menu, MenuAction action, int param1, int para
 	return 0;
 }
 
-/* public void OnGameFrame()
-{
-	for(int i = 1; i <= MaxClients; i++)
-	{
-		if(!IsValidClient(i) || IsFakeClient(i) || !gA_CenterSpeed[i].bMaster)
-		{
-			continue;
-		}
-
-		UpdateCenterSpeedHUD(i);
-	}
-} */
-
 public void OnPlayerRunCmdPost(int client, int buttons, int impulse, const float vel[3], const float angles[3], int weapon, int subtype, int cmdnum, int tickcount, int seed, const int mouse[2])
 {
-	if(!IsValidClient(client) || !gA_CenterSpeed[client].bMaster)
+	if(!IsValidClient(client) || IsFakeClient(client) || !gA_CenterSpeed[client].bMaster)
 	{
 		return;
 	}
@@ -706,9 +693,7 @@ static void UpdateCenterSpeedHUD(int client)
 		gA_CenterSpeed[client].fPrevSpeed = fCurrentSpeed;
 	}
 
-	SetHudTextParams(fHorizontally, fVertically, 1.0, 
-			iColors[0], iColors[1], iColors[2], iColors[3],
-			0, 0.0, 0.0, 0.0);
+	SetHudTextParamsEx(fHorizontally, fVertically, 1.0, iColors, _, 0, 1.0, 0.0, 0.0);
 
 	ShowSyncHudText(client, gH_CenterSpeedhud, "%d", RoundToNearest(fCurrentSpeed));
 }
