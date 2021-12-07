@@ -1,8 +1,4 @@
 #define EPSILON 0.000001
-#define TEAM_SPECTATOR 1
-#define SPEC_MODE_INEYE 4
-#define SPEC_MODE_CHASE 5
-#define INPUT_TIMEOUT 15.0
 
 // =========================================================== //
 // ************************StringMapEx************************ //
@@ -213,22 +209,6 @@ methodmap Preference < StringMapEx
 // ************************Preferences************************ //
 // =========================================================== //
 
-enum
-{
-	Pref_Speed_Display,
-	Pref_Speed_Position,
-	Pref_Speed_Normal_Color,
-	Pref_Speed_Perf_Color,
-	Pref_Keys_Display,
-	Pref_Keys_Position,
-	Pref_Keys_Normal_Color,
-	Pref_Keys_Overlap_Color,
-	Pref_Keys_Mouse_Direction,
-	PREF_COUNT
-};
-
-// =========================================================== //
-
 methodmap Preferences < ArrayList
 {
 	public Preferences()
@@ -282,6 +262,32 @@ methodmap Preferences < ArrayList
 // =========================================================== //
 // *************************stocks**************************** //
 // =========================================================== //
+
+enum
+{
+	Red,
+	Green,
+	Blue,
+	Alpha
+};
+
+stock int GetRGBAFromStr(const char[] str)
+{
+	if(StrContains(str, "red", false) != -1)
+	{
+		return Red;
+	}
+	else if(StrContains(str, "green", false) != -1)
+	{
+		return Green;
+	}
+	else if(StrContains(str, "blue", false) != -1)
+	{
+		return Blue;
+	}
+
+	return Alpha;
+}
 
 stock int ClampInt(int value, int maxValue)
 {
@@ -364,6 +370,16 @@ stock void BufferToRGBA(char[] buffer, int[] rgba, int maxlength)
 	rgba[1] = ClampRGBA(StringToInt(sRGBA[1]));
 	rgba[2] = ClampRGBA(StringToInt(sRGBA[2]));
 	rgba[3] = ClampRGBA(StringToInt(sRGBA[3]));
+}
+
+stock void FormatXY(float[] xy, char[] output, int maxlength)
+{
+	FormatEx(output, maxlength, "%f %f", ClampXY(xy[0] + EPSILON), ClampXY(xy[1] + EPSILON));
+}
+
+stock void FormatRGBA(int[] rgba, char[] output, int maxlength)
+{
+	FormatEx(output, maxlength, "%d %d %d %d", ClampRGBA(rgba[0]), ClampRGBA(rgba[1]), ClampRGBA(rgba[2]), ClampRGBA(rgba[3]));
 }
 
 // =========================================================== //

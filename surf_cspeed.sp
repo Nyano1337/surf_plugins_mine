@@ -1,59 +1,114 @@
-#define PLUGIN_NAME           "Center HUD Speed"
-#define PLUGIN_AUTHOR         "Ciallo, original by wangwei"
-#define PLUGIN_DESCRIPTION    "Center hud speed for surf"
-#define PLUGIN_VERSION        "1.0"
-#define PLUGIN_URL            "https://space.bilibili.com/2988883"
-
-#pragma newdecls required
-#pragma semicolon 1
-
 #include <sourcemod>
 #include <clientprefs>
 #include <convar_class>
 #include <shavit>
 #include <surf>
 
+#pragma newdecls required
+#pragma semicolon 1
+
 // velocity has to change this much before it is colored as increase/decrease
 #define COLORIZE_DEADZONE 2.0
 
-Database gH_SQL;
-bool gB_Late = false;
+enum
+{
+	Pref_CSpeed_Display,
+	Pref_CSpeed_Dynamic,
+	Pref_CSpeed_Position,
+	Pref_CSpeed_Normal_Color,
+	Pref_CSpeed_Increase_Color,
+	Pref_CSpeed_Decrease_Color,
+	PREF_COUNT
+};
+
+static char Preference_Names[PREF_COUNT][MAX_PREFERENCE_NAME_LENGTH] =
+{
+	"cspeed_display",
+	"cspeed_dynamic",
+	"cspeed_position",
+	"cspeed_normal_color",
+	"cspeed_increase_color",
+	"cspeed_decrease_color",
+};
+
+// https://github.com/momentum-mod/game/blob/4cb4ce37ed1c16de61d3d93d4b735ab93ee3867c/mp/game/momentum/resource/ClientScheme.res#L15
+static char Preference_Defaults[PREF_COUNT][MAX_PREFERENCE_VALUE_LENGTH] =
+{
+	"1",
+	"1",
+	"-1.00 0.36",
+	"200 200 200 255",
+	"24 150 211 255",
+	"255 106 106 255",
+};
+
+static char Preference_Displays[PREF_COUNT][MAX_PREFERENCE_DISPLAY_LENGTH] =
+{
+	"CSpeed Display",
+	"CSpeed Dynamic",
+	"CSpeed Position",
+	"CSpeed Normal Color",
+	"CSpeed Increase Color",
+	"CSpeed Decrease Color",
+};
+
+static int Preference_Types[PREF_COUNT] =
+{
+	PrefType_Numeric,
+	PrefType_Numeric,
+	PrefType_XY,
+	PrefType_RGBA,
+	PrefType_RGBA,
+	PrefType_RGBA,
+};
+
+static int Preference_Limits[PREF_COUNT] =
+{
+	1,
+	1,
+	-1,
+	-1,
+	-1,
+	-1,
+};
 
 enum struct cspeed_t
 {
 	bool bMaster;
 	bool bDynamic;
-	int iHorizon;
-	int iVertical;
-	int iStatic[4];
+	float fPosition[2];
+	int iNormal[4];
 	int iIncrease[4];
 	int iDecrease[4];
-	float fPrevSpeed;
 }
 
 cspeed_t gA_CenterSpeed[MAXPLAYERS+1];
 
+float gF_PrevSpeed[MAXPLAYERS+1];
 char gS_Choice[MAXPLAYERS+1][32];
-bool gB_MenuStatic[MAXPLAYERS+1];
-bool gB_MenuDynamic[MAXPLAYERS+1];
 
 // HUD
+Preferences gH_Cookie = null;
 Handle gH_CenterSpeedhud = null;
+
+bool gB_Late = false;
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
 	gB_Late = late;
+
+	RegPluginLibrary("surf_cspeed");
 
 	return APLRes_Success;
 }
 
 public Plugin myinfo =
 {
-	name = PLUGIN_NAME,
-	author = PLUGIN_AUTHOR,
-	description = PLUGIN_DESCRIPTION,
-	version = PLUGIN_VERSION,
-	url = PLUGIN_URL
+	name = "Center HUD Speed",
+	author = "Ciallo-Ani",
+	description = "Center hud speed for surf, based on MovementHUD",
+	version = "2.0",
+	url = "https://space.bilibili.com/2988883"
 };
 
 public void OnPluginStart()
@@ -63,119 +118,39 @@ public void OnPluginStart()
 
 	gH_CenterSpeedhud = CreateHudSynchronizer();
 
-	SQL_DBConnect();
+	gH_Cookie = InitPrefs();
 
 	if(gB_Late)
 	{
+		gB_Late = false;
 		for(int i = 1; i <= MaxClients; i++)
 		{
-			OnClientPutInServer(i);
+			if(!IsValidClient(i))
+			{
+				continue;
+			}
+
+			if(AreClientCookiesCached(i))
+			{
+				OnClientCookiesCached(i);
+			}
 		}
 	}
 }
 
-public void OnClientPutInServer(int client)
+public void OnClientCookiesCached(int client)
 {
-	if(IsValidClient(client))
+	if(!IsFakeClient(client))
 	{
-		GetCenterSpeedSettings(client);
+		InitPrefsForClient(client, gH_Cookie);
 	}
-}
-
-void GetCenterSpeedSettings(int client)
-{
-	char sQuery[512];
-	FormatEx(sQuery, 512, "SELECT"...
-		"`bcenter`, `dynamic`, `horizontally`, `vertically`, "...
-		"`StaticColor_r`, `StaticColor_g`, `StaticColor_b`, `StaticColor_a`, "...
-		"`IncreaseColor_r`, `IncreaseColor_g`, `IncreaseColor_b`, `IncreaseColor_a`, "...
-		"`DecreaseColor_r`, `DecreaseColor_g`, `DecreaseColor_b`, `DecreaseColor_a` "...
-		"FROM `centerspeed` WHERE auth = %d", GetSteamAccountID(client));
-
-	gH_SQL.Query(SQL_InitCenterSpeed_Callback, sQuery, GetClientSerial(client));
-}
-
-public void SQL_InitCenterSpeed_Callback(Database db, DBResultSet results, const char[] error, any data)
-{
-	if(results == null)
-	{
-		LogError("InitCenterSpeed error! Reason: %s", error);
-		
-		return;
-	}
-
-	int client = GetClientFromSerial(data);
-
-	if(results.FetchRow())
-	{
-		gA_CenterSpeed[client].bMaster = view_as<bool>(results.FetchInt(0));
-		gA_CenterSpeed[client].bDynamic = view_as<bool>(results.FetchInt(1));
-		gA_CenterSpeed[client].iHorizon = results.FetchInt(2);
-		gA_CenterSpeed[client].iVertical = results.FetchInt(3);
-
-		gA_CenterSpeed[client].iStatic[0] = results.FetchInt(4);
-		gA_CenterSpeed[client].iStatic[1] = results.FetchInt(5);
-		gA_CenterSpeed[client].iStatic[2] = results.FetchInt(6);
-		gA_CenterSpeed[client].iStatic[3] = results.FetchInt(7);
-
-		gA_CenterSpeed[client].iIncrease[0] = results.FetchInt(8);
-		gA_CenterSpeed[client].iIncrease[1] = results.FetchInt(9);
-		gA_CenterSpeed[client].iIncrease[2] = results.FetchInt(10);
-		gA_CenterSpeed[client].iIncrease[3] = results.FetchInt(11);
-
-		gA_CenterSpeed[client].iDecrease[0] = results.FetchInt(12);
-		gA_CenterSpeed[client].iDecrease[1] = results.FetchInt(13);
-		gA_CenterSpeed[client].iDecrease[2] = results.FetchInt(14);
-		gA_CenterSpeed[client].iDecrease[3] = results.FetchInt(15);
-	}
-	else
-	{
-		char sQuery[512];
-		FormatEx(sQuery, 512, "INSERT INTO `centerspeed` (auth) VALUES (%d)", GetSteamAccountID(client));
-
-		gH_SQL.Query(SQL_InitCenterSpeed_Callback2, sQuery, GetClientSerial(client));
-	}
-}
-
-public void SQL_InitCenterSpeed_Callback2(Database db, DBResultSet results, const char[] error, any data)
-{
-	if(results == null)
-	{
-		LogError("InitCenterSpeed Callback2 error! Reason: %s", error);
-		
-		return;
-	}
-
-	int client = GetClientFromSerial(data);
-
-	GetCenterSpeedSettings(client);
 }
 
 public void OnClientDisconnect(int client)
 {
-	char sQuery[512];
-	FormatEx(sQuery, 512, "UPDATE `centerspeed`"...
-		"SET bcenter = %d, dynamic = %d, horizontally = %d, vertically = %d, "...
-		"StaticColor_r = %d, StaticColor_g = %d, StaticColor_b = %d, StaticColor_a = %d, "...
-		"IncreaseColor_r = %d, IncreaseColor_g = %d, IncreaseColor_b = %d, IncreaseColor_a = %d, "...
-		"DecreaseColor_r = %d, DecreaseColor_g = %d, DecreaseColor_b = %d, DecreaseColor_a = %d "...
-		"WHERE auth = %d",
-		gA_CenterSpeed[client].bMaster, gA_CenterSpeed[client].bDynamic, gA_CenterSpeed[client].iHorizon, gA_CenterSpeed[client].iVertical,
-		gA_CenterSpeed[client].iStatic[0], gA_CenterSpeed[client].iStatic[1], gA_CenterSpeed[client].iStatic[2], gA_CenterSpeed[client].iStatic[3],
-		gA_CenterSpeed[client].iIncrease[0], gA_CenterSpeed[client].iIncrease[1], gA_CenterSpeed[client].iIncrease[2], gA_CenterSpeed[client].iIncrease[3],
-		gA_CenterSpeed[client].iDecrease[0], gA_CenterSpeed[client].iDecrease[1], gA_CenterSpeed[client].iDecrease[2], gA_CenterSpeed[client].iDecrease[3],
-		GetSteamAccountID(client));
-
-	gH_SQL.Query(SQL_UpdateCenterSpeed_Callback, sQuery, GetSteamAccountID(client));
-}
-
-public void SQL_UpdateCenterSpeed_Callback(Database db, DBResultSet results, const char[] error, any data)
-{
-	if(results == null)
+	if(!IsFakeClient(client))
 	{
-		LogError("UpdateCenterSpeed error! Reason: %s", error);
-		
-		return;
+		SavePrefsForClient(client);
 	}
 }
 
@@ -187,30 +162,28 @@ public Action Command_CenterSpeed(int client, int args)
 
 void OpenCenterSpeedMenu(int client)
 {
-	strcopy(gS_Choice[client], 32, "NONE");
-	gB_MenuStatic[client] = false;
-	gB_MenuDynamic[client] = false;
+	strcopy(gS_Choice[client], sizeof(gS_Choice[]), "NONE");
 
 	Menu menu = new Menu(CenterSpeedMenu_Handler);
 
 	char sDisplay[64];
 
-	Format(sDisplay, 64, "[%s]显示屏幕中间速度", (gA_CenterSpeed[client].bMaster)?"ON":"OFF");
+	Format(sDisplay, sizeof(sDisplay), "[%s]显示屏幕中间速度", (gA_CenterSpeed[client].bMaster)?"ON":"OFF");
 	menu.AddItem("centerbool", sDisplay);
 
-	Format(sDisplay, 64, "[%s]动态显示速度", (gA_CenterSpeed[client].bDynamic)?"ON":"OFF");
+	Format(sDisplay, sizeof(sDisplay), "[%s]动态显示速度", (gA_CenterSpeed[client].bDynamic)?"ON":"OFF");
 	menu.AddItem("dynamicbool", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整速度水平显示", gA_CenterSpeed[client].iHorizon);
-	menu.AddItem("horizontal", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%.2f]调整速度水平显示", gA_CenterSpeed[client].fPosition[0]);
+	menu.AddItem("x", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整速度垂直显示", gA_CenterSpeed[client].iVertical);
-	menu.AddItem("vertical", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%.2f]调整速度垂直显示", gA_CenterSpeed[client].fPosition[1]);
+	menu.AddItem("y", sDisplay);
 
-	Format(sDisplay, 64, "调整静态显示颜色");
-	menu.AddItem("static", sDisplay, (gA_CenterSpeed[client].bDynamic)?ITEMDRAW_DISABLED:ITEMDRAW_DEFAULT);
+	Format(sDisplay, sizeof(sDisplay), "调整普通显示颜色");
+	menu.AddItem("normal", sDisplay);
 
-	Format(sDisplay, 64, "调整动态显示颜色");
+	Format(sDisplay, sizeof(sDisplay), "调整动态显示颜色");
 	menu.AddItem("dynamic", sDisplay, (gA_CenterSpeed[client].bDynamic)?ITEMDRAW_DEFAULT:ITEMDRAW_DISABLED);
 
 	menu.Display(client, -1);
@@ -221,41 +194,36 @@ public int CenterSpeedMenu_Handler(Menu menu, MenuAction action, int param1, int
 	if(action == MenuAction_Select)
 	{
 		char sInfo[16];
-		menu.GetItem(param2, sInfo, 16);
+		menu.GetItem(param2, sInfo, sizeof(sInfo));
 
 		if(StrEqual(sInfo, "centerbool"))
 		{
 			gA_CenterSpeed[param1].bMaster = !gA_CenterSpeed[param1].bMaster;
 		}
-
 		else if(StrEqual(sInfo, "dynamicbool"))
 		{
 			gA_CenterSpeed[param1].bDynamic = !gA_CenterSpeed[param1].bDynamic;
 		}
-
-		else if(StrEqual(sInfo, "horizontal"))
+		else if(StrEqual(sInfo, "x"))
 		{
-			strcopy(gS_Choice[param1], 32, "horizontal");
+			strcopy(gS_Choice[param1], sizeof(gS_Choice[]), "x");
 			OpenAdjustMenu(param1);
 
 			return 0;
 		}
-
-		else if(StrEqual(sInfo, "vertical"))
+		else if(StrEqual(sInfo, "y"))
 		{
-			strcopy(gS_Choice[param1], 32, "vertical");
+			strcopy(gS_Choice[param1], sizeof(gS_Choice[]), "y");
 			OpenAdjustMenu(param1);
 
 			return 0;
 		}
-
-		else if(StrEqual(sInfo, "static"))
+		else if(StrEqual(sInfo, "normal"))
 		{
-			OpenStaticColorMenu(param1);
+			OpenNormalColorMenu(param1);
 
 			return 0;
 		}
-
 		else if(StrEqual(sInfo, "dynamic"))
 		{
 			OpenDynamicColorMenu(param1);
@@ -274,58 +242,38 @@ public int CenterSpeedMenu_Handler(Menu menu, MenuAction action, int param1, int
 	return 0;
 }
 
-void OpenStaticColorMenu(int client)
+void OpenNormalColorMenu(int client)
 {
-	gB_MenuStatic[client] = true;
-	Menu menu = new Menu(StaticColorMenu_Handler);
-	menu.SetTitle("调整静态颜色\n ");
+	Menu menu = new Menu(NormalColorMenu_Handler);
+	menu.SetTitle("调整普通颜色\n ");
 
 	char sDisplay[64];
 
-	Format(sDisplay, 64, "[%d]调整静态颜色: Red", gA_CenterSpeed[client].iStatic[0]);
-	menu.AddItem("R", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整普通颜色: Red", gA_CenterSpeed[client].iNormal[0]);
+	menu.AddItem("Red", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整静态颜色: Green", gA_CenterSpeed[client].iStatic[1]);
-	menu.AddItem("G", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整普通颜色: Green", gA_CenterSpeed[client].iNormal[1]);
+	menu.AddItem("Green", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整静态颜色: Blue", gA_CenterSpeed[client].iStatic[2]);
-	menu.AddItem("B", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整普通颜色: Blue", gA_CenterSpeed[client].iNormal[2]);
+	menu.AddItem("Blue", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整静态颜色: Alpha", gA_CenterSpeed[client].iStatic[3]);
-	menu.AddItem("A", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整普通颜色: Alpha", gA_CenterSpeed[client].iNormal[3]);
+	menu.AddItem("Alpha", sDisplay);
 
 	menu.ExitBackButton = true;
 	menu.Display(client, -1);
 }
 
-public int StaticColorMenu_Handler(Menu menu, MenuAction action, int param1, int param2)
+public int NormalColorMenu_Handler(Menu menu, MenuAction action, int param1, int param2)
 {
 	if(action == MenuAction_Select)
 	{
 		char sInfo[8];
-		menu.GetItem(param2, sInfo, 8);
+		menu.GetItem(param2, sInfo, sizeof(sInfo));
+		FormatEx(gS_Choice[param1], sizeof(gS_Choice[]), "Normal_%s", sInfo);
 
-		if(StrEqual(sInfo, "R"))
-		{
-			strcopy(gS_Choice[param1], 32, "Static_Red");
-		}
-
-		else if(StrEqual(sInfo, "G"))
-		{
-			strcopy(gS_Choice[param1], 32, "Static_Green");
-		}
-
-		else if(StrEqual(sInfo, "B"))
-		{
-			strcopy(gS_Choice[param1], 32, "Static_Blue");
-		}
-
-		else if(StrEqual(sInfo, "A"))
-		{
-			strcopy(gS_Choice[param1], 32, "Static_Alpha");
-		}
-
-		OpenAdjustMenu(param1);
+		OpenAdjustMenu(param1, true);
 	}
 
 	else if(action == MenuAction_Cancel)
@@ -343,39 +291,38 @@ public int StaticColorMenu_Handler(Menu menu, MenuAction action, int param1, int
 
 void OpenDynamicColorMenu(int client)
 {
-	gB_MenuDynamic[client] = true;
 	Menu menu = new Menu(DynamicColorMenu_Handler);
 	menu.SetTitle("调整动态颜色\n ");
 
 	char sDisplay[64];
 
-	Format(sDisplay, 64, "[%d]调整动态加速颜色: Red", gA_CenterSpeed[client].iIncrease[0]);
-	menu.AddItem("+R", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整动态加速颜色: Red", gA_CenterSpeed[client].iIncrease[0]);
+	menu.AddItem("+Red", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整动态加速颜色: Green", gA_CenterSpeed[client].iIncrease[1]);
-	menu.AddItem("+G", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整动态加速颜色: Green", gA_CenterSpeed[client].iIncrease[1]);
+	menu.AddItem("+Green", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整动态加速颜色: Blue", gA_CenterSpeed[client].iIncrease[2]);
-	menu.AddItem("+B", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整动态加速颜色: Blue", gA_CenterSpeed[client].iIncrease[2]);
+	menu.AddItem("+Blue", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整动态加速颜色: Alpha\n ", gA_CenterSpeed[client].iIncrease[3]);
-	menu.AddItem("+A", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整动态加速颜色: Alpha\n ", gA_CenterSpeed[client].iIncrease[3]);
+	menu.AddItem("+Alpha", sDisplay);
 
 	menu.AddItem("", sDisplay, ITEMDRAW_NOTEXT);
 	menu.AddItem("", sDisplay, ITEMDRAW_NOTEXT);
 	menu.AddItem("", sDisplay, ITEMDRAW_NOTEXT);
 
-	Format(sDisplay, 64, "[%d]调整动态减速颜色: Red", gA_CenterSpeed[client].iDecrease[0]);
-	menu.AddItem("-R", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整动态减速颜色: Red", gA_CenterSpeed[client].iDecrease[0]);
+	menu.AddItem("-Red", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整动态减速颜色: Green", gA_CenterSpeed[client].iDecrease[1]);
-	menu.AddItem("-G", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整动态减速颜色: Green", gA_CenterSpeed[client].iDecrease[1]);
+	menu.AddItem("-Green", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整动态减速颜色: Blue", gA_CenterSpeed[client].iDecrease[2]);
-	menu.AddItem("-B", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整动态减速颜色: Blue", gA_CenterSpeed[client].iDecrease[2]);
+	menu.AddItem("-Blue", sDisplay);
 
-	Format(sDisplay, 64, "[%d]调整动态减速颜色: Alpha", gA_CenterSpeed[client].iDecrease[3]);
-	menu.AddItem("-A", sDisplay);
+	Format(sDisplay, sizeof(sDisplay), "[%d]调整动态减速颜色: Alpha", gA_CenterSpeed[client].iDecrease[3]);
+	menu.AddItem("-Alpha", sDisplay);
 
 	menu.ExitBackButton = true;
 	menu.Display(client, -1);
@@ -386,49 +333,10 @@ public int DynamicColorMenu_Handler(Menu menu, MenuAction action, int param1, in
 	if(action == MenuAction_Select)
 	{
 		char sInfo[8];
-		menu.GetItem(param2, sInfo, 8);
+		menu.GetItem(param2, sInfo, sizeof(sInfo));
+		FormatEx(gS_Choice[param1], sizeof(gS_Choice[]), "Dynamic_%s", sInfo);
 
-		if(StrEqual(sInfo, "+R"))
-		{
-			strcopy(gS_Choice[param1], 32, "Dynamic_+Red");
-		}
-
-		else if(StrEqual(sInfo, "+G"))
-		{
-			strcopy(gS_Choice[param1], 32, "Dynamic_+Green");
-		}
-
-		else if(StrEqual(sInfo, "+B"))
-		{
-			strcopy(gS_Choice[param1], 32, "Dynamic_+Blue");
-		}
-
-		else if(StrEqual(sInfo, "+A"))
-		{
-			strcopy(gS_Choice[param1], 32, "Dynamic_+Alpha");
-		}
-
-		else if(StrEqual(sInfo, "-R"))
-		{
-			strcopy(gS_Choice[param1], 32, "Dynamic_-Red");
-		}
-
-		else if(StrEqual(sInfo, "-G"))
-		{
-			strcopy(gS_Choice[param1], 32, "Dynamic_-Green");
-		}
-
-		else if(StrEqual(sInfo, "-B"))
-		{
-			strcopy(gS_Choice[param1], 32, "Dynamic_-Blue");
-		}
-
-		else if(StrEqual(sInfo, "-A"))
-		{
-			strcopy(gS_Choice[param1], 32, "Dynamic_-Alpha");
-		}
-
-		OpenAdjustMenu(param1);
+		OpenAdjustMenu(param1, false);
 	}
 
 	else if(action == MenuAction_Cancel)
@@ -444,15 +352,15 @@ public int DynamicColorMenu_Handler(Menu menu, MenuAction action, int param1, in
 	return 0;
 }
 
-void OpenAdjustMenu(int client)
+void OpenAdjustMenu(int client, bool normal = false, bool dynamic = false)
 {
 	Menu menu = new Menu(AdjustMenu_Handler);
-	if(gB_MenuStatic[client])
+	if(normal)
 	{
-		menu.SetTitle("设置静态速度颜色\n ");
+		menu.SetTitle("设置普通速度颜色\n ");
 	}
 
-	else if(gB_MenuDynamic[client])
+	else if(dynamic)
 	{
 		menu.SetTitle("设置动态速度颜色\n ");
 	}
@@ -476,173 +384,57 @@ void OpenAdjustMenu(int client)
 
 public int AdjustMenu_Handler(Menu menu, MenuAction action, int param1, int param2)
 {
+	bool normal = false;
+	bool dynamic = false;
+
 	if(action == MenuAction_Select)
 	{
 		char sInfo[8];
-		menu.GetItem(param2, sInfo, 8);
+		menu.GetItem(param2, sInfo, sizeof(sInfo));
 
-		int fAdjust;
+		int iAdjust = StringToInt(sInfo);
 
-		if(StrEqual(sInfo, "+1"))
+		if(StrEqual(gS_Choice[param1], "x"))
 		{
-			fAdjust = 1;
+			gA_CenterSpeed[param1].fPosition[0] = ClampXY(gA_CenterSpeed[param1].fPosition[0] + iAdjust * 0.01);
 		}
-
-		else if(StrEqual(sInfo, "+10"))
+		else if(StrEqual(gS_Choice[param1], "y"))
 		{
-			fAdjust = 10;
+			gA_CenterSpeed[param1].fPosition[1] = ClampXY(gA_CenterSpeed[param1].fPosition[1] + iAdjust * 0.01);
 		}
-
-		else if(StrEqual(sInfo, "+50"))
+		else if(StrContains(gS_Choice[param1], "normal", false) != -1)
 		{
-			fAdjust = 50;
+			normal = true;
+			int color = GetRGBAFromStr(gS_Choice[param1]);
+			gA_CenterSpeed[param1].iNormal[color] = ClampRGBA(gA_CenterSpeed[param1].iNormal[color] + iAdjust);
 		}
-
-		else if(StrEqual(sInfo, "-1"))
+		else if(StrContains(gS_Choice[param1], "dynamic", false) != -1)
 		{
-			fAdjust = -1;
-		}
-
-		else if(StrEqual(sInfo, "-10"))
-		{
-			fAdjust = -10;
-		}
-
-		else if(StrEqual(sInfo, "-50"))
-		{
-			fAdjust = -50;
-		}
-
-
-		if(StrEqual(gS_Choice[param1], "horizontal"))
-		{
-			gA_CenterSpeed[param1].iHorizon += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "vertical"))
-		{
-			gA_CenterSpeed[param1].iVertical += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Static_Red"))
-		{
-			gA_CenterSpeed[param1].iStatic[0] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Static_Green"))
-		{
-			gA_CenterSpeed[param1].iStatic[1] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Static_Blue"))
-		{
-			gA_CenterSpeed[param1].iStatic[2] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Static_Alpha"))
-		{
-			gA_CenterSpeed[param1].iStatic[3] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Dynamic_+Red"))
-		{
-			gA_CenterSpeed[param1].iIncrease[0] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Dynamic_+Green"))
-		{
-			gA_CenterSpeed[param1].iIncrease[1] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Dynamic_+Blue"))
-		{
-			gA_CenterSpeed[param1].iIncrease[2] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Dynamic_+Alpha"))
-		{
-			gA_CenterSpeed[param1].iIncrease[3] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Dynamic_-Red"))
-		{
-			gA_CenterSpeed[param1].iDecrease[0] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Dynamic_-Green"))
-		{
-			gA_CenterSpeed[param1].iDecrease[1] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Dynamic_-Blue"))
-		{
-			gA_CenterSpeed[param1].iDecrease[2] += fAdjust;
-		}
-
-		else if(StrEqual(gS_Choice[param1], "Dynamic_-Alpha"))
-		{
-			gA_CenterSpeed[param1].iDecrease[3] += fAdjust;
-		}
-
-
-		if(gA_CenterSpeed[param1].iHorizon < -100)
-		{
-			gA_CenterSpeed[param1].iHorizon = -100;
-		}
-		
-		else if(gA_CenterSpeed[param1].iHorizon > 100)
-		{
-			gA_CenterSpeed[param1].iHorizon = 100;
-		}
-
-		else if(gA_CenterSpeed[param1].iVertical < -100)
-		{
-			gA_CenterSpeed[param1].iVertical = -100;
-		}
-
-		else if(gA_CenterSpeed[param1].iVertical > 100)
-		{
-			gA_CenterSpeed[param1].iVertical = 100;
-		}
-
-		for(int i = 0; i < 4; i++)
-		{
-			if(gA_CenterSpeed[param1].iIncrease[i] < 0)
+			dynamic = true;
+			int color = GetRGBAFromStr(gS_Choice[param1]);
+			if(FindCharInString(gS_Choice[param1], '+', true) != -1)
 			{
-				gA_CenterSpeed[param1].iIncrease[i] = 0;
+				gA_CenterSpeed[param1].iIncrease[color] = ClampRGBA(gA_CenterSpeed[param1].iIncrease[color] + iAdjust);
 			}
-
-			else if(gA_CenterSpeed[param1].iIncrease[i] > 255)
+			else
 			{
-				gA_CenterSpeed[param1].iIncrease[i] = 255;
-			}
-
-			else if(gA_CenterSpeed[param1].iDecrease[i] < 0)
-			{
-				gA_CenterSpeed[param1].iDecrease[i] = 0;
-			}
-
-			else if(gA_CenterSpeed[param1].iDecrease[i] > 255)
-			{
-				gA_CenterSpeed[param1].iDecrease[i] = 255;
+				gA_CenterSpeed[param1].iDecrease[color] = ClampRGBA(gA_CenterSpeed[param1].iDecrease[color] + iAdjust);
 			}
 		}
 
-		OpenAdjustMenu(param1);
+		OpenAdjustMenu(param1, normal, dynamic);
 	}
 
 	else if(action == MenuAction_Cancel)
 	{
-		if(gB_MenuStatic[param1])
+		if(normal)
 		{
-			OpenStaticColorMenu(param1);
+			OpenNormalColorMenu(param1);
 		}
-
-		else if(gB_MenuDynamic[param1])
+		else if(dynamic)
 		{
 			OpenDynamicColorMenu(param1);
 		}
-
 		else
 		{
 			OpenCenterSpeedMenu(param1);
@@ -671,29 +463,26 @@ static void UpdateCenterSpeedHUD(int client)
 {
 	int target = GetHUDTarget(client);
 
-	float fHorizontally = gA_CenterSpeed[client].iHorizon * 0.01;
-	float fVertically = gA_CenterSpeed[client].iVertical * 0.01;
-
 	float fSpeed[3];
 	GetEntPropVector(target, Prop_Data, "m_vecVelocity", fSpeed);
 
 	float fCurrentSpeed = SquareRoot(Pow(fSpeed[0], 2.0) + Pow(fSpeed[1], 2.0));
-	float fPrevSpeed = gA_CenterSpeed[client].fPrevSpeed;
+	float fPrevSpeed = gF_PrevSpeed[client];
 	int iColors[4];
 
 	if(!gA_CenterSpeed[client].bDynamic)
 	{
-		SetColors(iColors, gA_CenterSpeed[client].iStatic);
+		SetColors(iColors, gA_CenterSpeed[client].iNormal);
 	}
 	else
 	{
 		SetPrimaryFgColor(iColors, fCurrentSpeed - fPrevSpeed, COLORIZE_DEADZONE, 
-			gA_CenterSpeed[client].iStatic, gA_CenterSpeed[client].iIncrease, gA_CenterSpeed[client].iDecrease);
+			gA_CenterSpeed[client].iNormal, gA_CenterSpeed[client].iIncrease, gA_CenterSpeed[client].iDecrease);
 
-		gA_CenterSpeed[client].fPrevSpeed = fCurrentSpeed;
+		gF_PrevSpeed[client] = fCurrentSpeed;
 	}
 
-	SetHudTextParamsEx(fHorizontally, fVertically, 1.0, iColors, _, 0, 1.0, 0.0, 0.0);
+	SetHudTextParamsEx(gA_CenterSpeed[client].fPosition[0], gA_CenterSpeed[client].fPosition[1], 1.0, iColors, _, 0, 1.0, 0.0, 0.0);
 
 	ShowSyncHudText(client, gH_CenterSpeedhud, "%d", RoundToNearest(fCurrentSpeed));
 }
@@ -745,28 +534,67 @@ int GetHUDTarget(int client)
 	return target;
 }
 
-void SQL_DBConnect()
+Preference Pref(int pref)
 {
-	gH_SQL = GetTimerDatabaseHandle();
-
-	char sQuery[2048];
-	FormatEx(sQuery, 2048,
-		"CREATE TABLE IF NOT EXISTS `centerspeed` (`id` INT AUTO_INCREMENT, `auth` INT, "...
-		"`bcenter` TINYINT(1) NOT NULL DEFAULT 1, `dynamic` TINYINT(1) NOT NULL DEFAULT 1, `horizontally` INT NOT NULL DEFAULT -100, `vertically` INT NOT NULL DEFAULT 36, "...
-		"`StaticColor_r` INT NOT NULL DEFAULT 200, `StaticColor_g` INT NOT NULL DEFAULT 200, `StaticColor_b` INT NOT NULL DEFAULT 200, `StaticColor_a` INT NOT NULL DEFAULT 255, "...
-		"`IncreaseColor_r` INT NOT NULL DEFAULT 24, `IncreaseColor_g` INT NOT NULL DEFAULT 150, `IncreaseColor_b` INT NOT NULL DEFAULT 211, `IncreaseColor_a` INT NOT NULL DEFAULT 255, "...
-		"`DecreaseColor_r` INT NOT NULL DEFAULT 255, `DecreaseColor_g` INT NOT NULL DEFAULT 106, `DecreaseColor_b` INT NOT NULL DEFAULT 106, `DecreaseColor_a` INT NOT NULL DEFAULT 255, "...
-		"PRIMARY KEY (`id`)) ENGINE=INNODB;");
-
-	gH_SQL.Query(SQL_CreateTable_Callback, sQuery);
+	return gH_Cookie.GetPreference(pref);
 }
 
-public void SQL_CreateTable_Callback(Database db, DBResultSet results, const char[] error, any data)
+Preferences InitPrefs()
 {
-	if(results == null)
+	Preferences prefs = new Preferences();
+	for (int i = 0; i < PREF_COUNT; i++)
 	{
-		LogError("Centerspeed error! Centerspeed' table creation failed. Reason: %s", error);
-		
-		return;
+		prefs.CreatePreference(Preference_Names[i],
+								Preference_Displays[i],
+								Preference_Defaults[i],
+								Preference_Types[i],
+								Preference_Limits[i]);
 	}
+
+	return prefs;
+}
+
+void InitPrefsForClient(int client, Preferences prefs)
+{
+	for (int i = 0; i < prefs.Length; i++)
+	{
+		Pref(i).Init(client);
+	}
+
+	gA_CenterSpeed[client].bMaster = view_as<bool>(Pref(Pref_CSpeed_Display).GetIntVal(client));
+	gA_CenterSpeed[client].bDynamic = view_as<bool>(Pref(Pref_CSpeed_Dynamic).GetIntVal(client));
+
+	char posBuf[16];
+	Pref(Pref_CSpeed_Position).GetStringVal(client, posBuf, sizeof(posBuf));
+	BufferToXY(posBuf, gA_CenterSpeed[client].fPosition, sizeof(cspeed_t::fPosition));
+
+	char colorBuf[32];
+	Pref(Pref_CSpeed_Normal_Color).GetStringVal(client, colorBuf, sizeof(colorBuf));
+	BufferToRGBA(colorBuf, gA_CenterSpeed[client].iNormal, sizeof(cspeed_t::iNormal));
+
+	Pref(Pref_CSpeed_Increase_Color).GetStringVal(client, colorBuf, sizeof(colorBuf));
+	BufferToRGBA(colorBuf, gA_CenterSpeed[client].iIncrease, sizeof(cspeed_t::iIncrease));
+
+	Pref(Pref_CSpeed_Decrease_Color).GetStringVal(client, colorBuf, sizeof(colorBuf));
+	BufferToRGBA(colorBuf, gA_CenterSpeed[client].iDecrease, sizeof(cspeed_t::iDecrease));
+}
+
+void SavePrefsForClient(int client)
+{
+	Pref(Pref_CSpeed_Display).SetIntVal(client, gA_CenterSpeed[client].bMaster ? 1 : 0);
+	Pref(Pref_CSpeed_Dynamic).SetIntVal(client, gA_CenterSpeed[client].bDynamic ? 1 : 0);
+
+	char posBuf[16];
+	FormatXY(gA_CenterSpeed[client].fPosition, posBuf, sizeof(posBuf));
+	Pref(Pref_CSpeed_Position).SetStringVal(client, posBuf);
+
+	char colorBuf[32];
+	FormatRGBA(gA_CenterSpeed[client].iNormal, colorBuf, sizeof(colorBuf));
+	Pref(Pref_CSpeed_Normal_Color).SetStringVal(client, colorBuf);
+
+	FormatRGBA(gA_CenterSpeed[client].iIncrease, colorBuf, sizeof(colorBuf));
+	Pref(Pref_CSpeed_Increase_Color).SetStringVal(client, colorBuf);
+
+	FormatRGBA(gA_CenterSpeed[client].iDecrease, colorBuf, sizeof(colorBuf));
+	Pref(Pref_CSpeed_Decrease_Color).SetStringVal(client, colorBuf);
 }
