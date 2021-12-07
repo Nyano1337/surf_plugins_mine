@@ -1,6 +1,5 @@
 #include <sourcemod>
 #include <clientprefs>
-#include <convar_class>
 #include <shavit>
 #include <surf>
 
