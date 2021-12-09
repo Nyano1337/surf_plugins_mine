@@ -229,7 +229,7 @@ static void LoadDemos(const char[] nowDemoName)
 		GetDemoStatus(sDemo);
 
 		info.iCreateTime = GetFileTime(sDemo, FileTime_Created);
-		if(info.iCreateTime - GetTime() >= 604800) // after 7 days
+		if(info.iCreateTime - GetTime() >= 86400) // after 7 days
 		{
 			DeleteFile(sDemo);
 			continue;

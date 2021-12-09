@@ -88,9 +88,11 @@ char gS_Choice[MAXPLAYERS+1][32];
 
 // HUD
 Preferences gH_Cookie = null;
-Handle gH_CenterSpeedhud = null;
+Handle gH_CenterSpeedHud = null;
+Handle gH_CompareSpeedHud = null;
 
 bool gB_Late = false;
+bool gB_Replay = false;
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
@@ -115,9 +117,11 @@ public void OnPluginStart()
 	RegConsoleCmd("sm_cspeed", Command_CenterSpeed, "Open centerspeed menu");
 	RegConsoleCmd("sm_centerspeed", Command_CenterSpeed, "Open centerspeed menu");
 
-	gH_CenterSpeedhud = CreateHudSynchronizer();
+	gH_CenterSpeedHud = CreateHudSynchronizer();
+	gH_CompareSpeedHud = CreateHudSynchronizer();
 
 	gH_Cookie = InitPrefs();
+	gB_Replay = LibraryExists("shavit-replay");
 
 	if(gB_Late)
 	{
@@ -150,6 +154,22 @@ public void OnClientDisconnect(int client)
 	if(!IsFakeClient(client))
 	{
 		SavePrefsForClient(client);
+	}
+}
+
+public void OnLibraryAdded(const char[] name)
+{
+	if(StrEqual(name, "shavit-replay"))
+	{
+		gB_Replay = true;
+	}
+}
+
+public void OnLibraryRemoved(const char[] name)
+{
+	if(StrEqual(name, "shavit-replay"))
+	{
+		gB_Replay = false;
 	}
 }
 
@@ -482,8 +502,20 @@ static void UpdateCenterSpeedHUD(int client)
 	}
 
 	SetHudTextParamsEx(gA_CenterSpeed[client].fPosition[0], gA_CenterSpeed[client].fPosition[1], 1.0, iColors, _, 0, 1.0, 0.0, 0.0);
+	ShowSyncHudText(client, gH_CenterSpeedHud, "%d", RoundToNearest(fCurrentSpeed));
 
-	ShowSyncHudText(client, gH_CenterSpeedhud, "%d", RoundToNearest(fCurrentSpeed));
+	if(gB_Replay && Shavit_GetTimerStatus(target) != Timer_Stopped && Shavit_GetClosestReplayTime(target) != -1.0 && Shavit_GetReplayFrameCount(Shavit_GetClosestReplayStyle(target), Shavit_GetClientTrack(target)) != 0)
+	{
+		float fReplaySpeed = Shavit_GetClosestReplayVelocityDifference(target, false);
+		if(Shavit_InsideZone(target, Zone_Start, -1))
+		{
+			fReplaySpeed = 0.0;
+		}
+
+		SetColors(iColors, fReplaySpeed >= 0 ? gA_CenterSpeed[client].iIncrease : gA_CenterSpeed[client].iDecrease);
+		SetHudTextParamsEx(gA_CenterSpeed[client].fPosition[0], gA_CenterSpeed[client].fPosition[1], 1.0, iColors, _, 0, 0.0, 0.0, 0.0);
+		ShowSyncHudText(client, gH_CompareSpeedHud, "\n(%.2f)", fReplaySpeed);
+	}
 }
 
 void SetColors(int[] output, int[] origin)
