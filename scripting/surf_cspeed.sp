@@ -507,10 +507,6 @@ static void UpdateCenterSpeedHUD(int client)
 	if(gB_Replay && Shavit_GetTimerStatus(target) != Timer_Stopped && Shavit_GetClosestReplayTime(target) != -1.0 && Shavit_GetReplayFrameCount(Shavit_GetClosestReplayStyle(target), Shavit_GetClientTrack(target)) != 0)
 	{
 		float fReplaySpeed = Shavit_GetClosestReplayVelocityDifference(target, false);
-		if(Shavit_InsideZone(target, Zone_Start, -1))
-		{
-			fReplaySpeed = 0.0;
-		}
 
 		SetColors(iColors, fReplaySpeed >= 0 ? gA_CenterSpeed[client].iIncrease : gA_CenterSpeed[client].iDecrease);
 		SetHudTextParamsEx(gA_CenterSpeed[client].fPosition[0], gA_CenterSpeed[client].fPosition[1], 1.0, iColors, _, 0, 0.0, 0.0, 0.0);

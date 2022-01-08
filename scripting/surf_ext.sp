@@ -40,7 +40,7 @@ public Action Command_Ext(int client, int args)
 
 	menu.ExitButton = false;
 	menu.DisplayVoteToAll(15);
-	gH_ExtFailTimer = CreateTimer(15.0, Timer_ExtFail);
+	gH_ExtFailTimer = CreateTimer(15.1, Timer_ExtFail);
 
 	return Plugin_Handled;
 }
